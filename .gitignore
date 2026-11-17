@@ -1,0 +1,17 @@
+# Flutter / Android / Node build artifacts & secrets
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+node_modules/
+.env
+.env.*
+.env-*
+*.jks
+*.keystore
+*.p12
+*.pem
+*service-account*.json
+google-services.json
+GoogleService-Info.plist
+key.properties

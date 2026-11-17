@@ -1,0 +1,151 @@
+name: Build White-Label Print Bridge APK
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'print-bridge/**'
+      - 'scripts/apply-brand-assets.mjs'
+      - '.github/workflows/build-print-companion.yml'
+  repository_dispatch:
+    types: [build-print-companion]
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: 'Tenant identifier slug (e.g., default, sabor-latino)'
+        required: false
+        default: 'default'
+        type: string
+      app_name:
+        description: 'Custom application display name'
+        required: false
+        default: 'Thermal Print Bridge'
+        type: string
+      app_id:
+        description: 'Android applicationId / package name'
+        required: false
+        default: 'com.multitenant.printbridge'
+        type: string
+      api_url:
+        description: 'Backend API endpoint URL'
+        required: false
+        default: 'https://api.example.com'
+        type: string
+      ws_url:
+        description: 'Backend WebSocket subscriptions URL'
+        required: false
+        default: 'wss://api.example.com/graphql'
+        type: string
+      primary_color:
+        description: 'Brand primary hex color'
+        required: false
+        default: '#EA581E'
+        type: string
+      surface_color:
+        description: 'Brand surface hex color'
+        required: false
+        default: '#F8FAFC'
+        type: string
+      logo_url:
+        description: 'Optional HTTPS URL for tenant brand logo PNG/WebP'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build-print-bridge-apk:
+    name: Build & Publish Print Bridge APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TENANT_SLUG: ${{ inputs.tenant_slug || github.event.client_payload.tenant_slug || 'default' }}
+      ANDROID_APP_NAME: ${{ inputs.app_name || github.event.client_payload.app_name || 'Thermal Print Bridge' }}
+      ANDROID_APP_ID: ${{ inputs.app_id || github.event.client_payload.app_id || 'com.multitenant.printbridge' }}
+      API_URL: ${{ inputs.api_url || github.event.client_payload.api_url || 'https://api.example.com' }}
+      WS_URL: ${{ inputs.ws_url || github.event.client_payload.ws_url || 'wss://api.example.com/graphql' }}
+      PRIMARY_COLOR: ${{ inputs.primary_color || github.event.client_payload.primary_color || '#EA581E' }}
+      SURFACE_COLOR: ${{ inputs.surface_color || github.event.client_payload.surface_color || '#F8FAFC' }}
+      BRAND_LOGO_URL: ${{ inputs.logo_url || github.event.client_payload.logo_url || '' }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.8'
+          channel: 'stable'
+          cache: true
+
+      - name: Apply White-Label Brand Assets & Validate Package ID
+        run: |
+          node scripts/apply-brand-assets.mjs \
+            --app-dir print-bridge \
+            --app-id "$ANDROID_APP_ID" \
+            --logo-url "$BRAND_LOGO_URL"
+
+      - name: Make Gradle Wrapper Executable
+        run: |
+          sed -i 's/\r$//' print-bridge/android/gradlew
+          chmod +x print-bridge/android/gradlew
+
+      - name: Install Dependencies
+        working-directory: print-bridge
+        run: flutter pub get
+
+      - name: Build Android Release APK
+        working-directory: print-bridge
+        run: |
+          flutter build apk --release \
+            --android-skip-build-dependency-validation \
+            --dart-define=TENANT_SLUG="$TENANT_SLUG" \
+            --dart-define=APP_NAME="$ANDROID_APP_NAME" \
+            --dart-define=API_URL="$API_URL" \
+            --dart-define=WS_URL="$WS_URL" \
+            --dart-define=PRIMARY_COLOR="$PRIMARY_COLOR" \
+            --dart-define=SURFACE_COLOR="$SURFACE_COLOR" \
+            --dart-define=LOGO_URL="$BRAND_LOGO_URL"
+
+      - name: Prepare Release Asset
+        run: |
+          mkdir -p release-assets
+          cp print-bridge/build/app/outputs/flutter-apk/app-release.apk "release-assets/print-bridge-${TENANT_SLUG}-release.apk"
+
+      - name: Upload APK Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: print-bridge-${{ inputs.tenant_slug || 'default' }}-release
+          path: release-assets/*.apk
+          retention-days: 30
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: print-bridge-${{ inputs.tenant_slug || 'default' }}-v${{ github.run_number }}
+          name: "Thermal Print Bridge (${{ inputs.tenant_slug || 'default' }}) v1.0.${{ github.run_number }}"
+          body: |
+            ### Thermal ESC/POS Print Bridge Release (Android APK)
+            **Version:** `1.0.${{ github.run_number }}`
+            **Commit:** `${{ github.sha }}`
+
+            #### Supported Thermal Printers:
+            - Wi-Fi / Ethernet LAN TCP port 9100 with RFC-1918 private subnet validation.
+            - Bluetooth SPP RFCOMM direct thermal streaming.
+            - HMAC-SHA256 authenticated cloud print tunnel.
+          files: release-assets/*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
